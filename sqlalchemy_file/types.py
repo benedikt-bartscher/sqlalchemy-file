@@ -258,13 +258,69 @@ class FileFieldSessionTracker:
                 )
 
     @classmethod
+    def _flatten_history_files(
+        cls, file_list: List[File | List[File] | None]
+    ) -> List[File]:
+        """Flatten the history of files to a list of File objects.
+
+        Args:
+            file_list (List[File | List[File] | None]): The list of files to flatten.
+
+        Returns:
+            List[File]: The flattened list of files.
+
+        """
+        flattened: List[File] = []
+
+        for dict_or_list in file_list:
+            if dict_or_list is None:
+                continue
+
+            if isinstance(dict_or_list, File):
+                flattened.append(dict_or_list)
+            else:
+                for file in dict_or_list:
+                    flattened.append(file)
+        return flattened
+
+    @classmethod
     def _after_update(cls, mapper: Mapper, _: Connection, obj: Any) -> None:  # type: ignore[type-arg]
         """After update, mark all edited files as old
         in order to delete them when after session is committed.
+
+        NOTE: If only metadata was updated, the file should not be deleted.
         """
         tracked_columns: List[str] = cls.mapped_entities.get(mapper.class_, [])
         for key in tracked_columns:
             history = get_history(obj, key)
+
+            if history.added and history.deleted:
+                # flatten the added and deleted files
+                added_files_flat = cls._flatten_history_files(history.added)
+                deleted_files_flat = cls._flatten_history_files(history.deleted)
+
+                # get all file ids from added and deleted
+                added_files_ids = {file["file_id"] for file in added_files_flat}
+
+                deleted_files_ids = {file["file_id"] for file in deleted_files_flat}
+
+                # if the same file is added and deleted, it means only metadata was updated
+                # so we don't need to delete the file
+                files_ids_to_delete = added_files_ids - deleted_files_ids
+
+                filtered_deleted_files = [
+                    file
+                    for file in deleted_files_flat
+                    if file["file_id"] in files_ids_to_delete
+                ]
+
+                cls.add_old_files_to_session(
+                    inspect(obj).session,
+                    cls.extract_files_from_history(filtered_deleted_files),
+                )
+
+                continue
+
             cls.add_old_files_to_session(
                 inspect(obj).session, cls.extract_files_from_history(history.deleted)
             )
@@ -310,7 +366,10 @@ class FileFieldSessionTracker:
 
     @classmethod
     def prepare_file_attr(
-        cls, mapper: Mapper, obj: Any, key: str  # type: ignore[type-arg]
+        cls,
+        mapper: Mapper,
+        obj: Any,
+        key: str,  # type: ignore[type-arg]
     ) -> Tuple[bool, Union[File, List[File]]]:
         """Prepare file(s) for saving into the database by converting bytes or strings into
         File objects, applying validators, uploading the file(s) to the upload storage,
