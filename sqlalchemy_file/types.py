@@ -306,7 +306,7 @@ class FileFieldSessionTracker:
 
                 # if the same file is added and deleted, it means only metadata was updated
                 # so we don't need to delete the file
-                files_ids_to_delete = added_files_ids - deleted_files_ids
+                files_ids_to_delete = deleted_files_ids - added_files_ids
 
                 filtered_deleted_files = [
                     file
